@@ -1,0 +1,15 @@
+**/target/
+*.class
+*.log
+*.jar
+*.war
+*.ear
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.mvn/
+wrapper/

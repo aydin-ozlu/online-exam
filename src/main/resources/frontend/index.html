@@ -1,0 +1,227 @@
+<!DOCTYPE html> 
+<html lang="tr">
+<head>
+    <meta charset="UTF-8" />
+    <title>Online Sınav</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 2em auto; }
+        .question { margin-bottom: 20px; }
+        .question h3 { margin-bottom: 10px; }
+        .submit-btn { padding: 10px 20px; font-size: 16px; }
+        .result { margin-top: 20px; font-weight: bold; }
+        #loginDiv { border: 1px solid #ccc; padding: 1em; margin-bottom: 1em; }
+        #loginError { color: red; margin-top: 0.5em; }
+    </style>
+</head>
+<body>
+    <h1>Online Sınav</h1>
+
+    <!-- Login formu -->
+    <div id="loginDiv">
+        <h2>Giriş Yap</h2>
+        <input id="username" placeholder="Kullanıcı adı" />
+        <input id="password" type="password" placeholder="Parola" />
+        <button id="loginBtn">Giriş</button>
+        <div id="loginError"></div>
+    </div>
+
+    <!-- Sınav yükleme alanı -->
+    <label for="examIdInput">Sınav ID:</label>
+    <input type="number" id="examIdInput" min="1" value="1" />
+    <button id="loadExamBtn">Sınavı Yükle</button>
+    
+    <form id="examForm" style="display:none;">
+        <br />
+        <div id="questionsContainer"></div>
+        <button type="submit" class="submit-btn">Cevapları Gönder</button>
+    </form>
+
+    <div id="result" class="result"></div>
+
+    <script>
+        const loginDiv = document.getElementById('loginDiv');
+        const loginBtn = document.getElementById('loginBtn');
+        const loginError = document.getElementById('loginError');
+        const loadExamBtn = document.getElementById('loadExamBtn');
+        const examIdInput = document.getElementById('examIdInput');
+        const examForm = document.getElementById('examForm');
+        const questionsContainer = document.getElementById('questionsContainer');
+        const resultDiv = document.getElementById('result');
+
+        // Giriş butonu
+        loginBtn.addEventListener('click', () => {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value.trim();
+
+            if (!username || !password) {
+                loginError.textContent = "Kullanıcı adı ve parola gerekli.";
+                return;
+            }
+
+            const basicAuth = btoa(username + ":" + password);
+
+            fetch('/login', {
+                method: 'POST',
+                headers: {
+                    'Authorization': 'Basic ' + basicAuth
+                }
+            }).then(res => {
+                if (!res.ok) throw new Error("Giriş başarısız");
+                return res.json();
+            }).then(data => {
+                localStorage.setItem('jwtToken', data.token);
+                loginError.textContent = '';
+                loginDiv.style.display = 'none';
+                examForm.style.display = 'none';
+                questionsContainer.innerHTML = '';
+                resultDiv.textContent = '';
+                alert("Giriş başarılı! Şimdi sınav yükleyebilirsiniz.");
+            }).catch(err => {
+                loginError.textContent = err.message;
+            });
+        });
+
+        // Sınavı yükle butonu
+        loadExamBtn.addEventListener('click', () => {
+            const examId = examIdInput.value;
+            if (!examId || examId < 1) {
+                alert('Lütfen geçerli bir sınav ID giriniz.');
+                return;
+            }
+
+            const token = localStorage.getItem('jwtToken');
+            if (!token) {
+                alert('Önce giriş yapmalısınız!');
+                loginDiv.style.display = 'block';
+                examForm.style.display = 'none';
+                questionsContainer.innerHTML = '';
+                resultDiv.textContent = '';
+                return;
+            }
+
+            fetch(`/exams/${examId}`, {
+                headers: { 'Authorization': 'Bearer ' + token }
+            })
+            .then(response => {
+                if (response.status === 401) {
+                    alert('Giriş yapmanız gerekiyor!');
+                    loginDiv.style.display = 'block';
+                    examForm.style.display = 'none';
+                    questionsContainer.innerHTML = '';
+                    resultDiv.textContent = '';
+                    throw new Error('Unauthorized');
+                }
+                if (!response.ok) throw new Error('Sınav bulunamadı');
+                return response.json();
+            })
+            .then(data => {
+                renderExam(data);
+                examForm.style.display = 'block';
+                resultDiv.textContent = '';
+            })
+            .catch(err => {
+                if (err.message !== 'Unauthorized') {
+                    alert(err.message);
+                    examForm.style.display = 'none';
+                    questionsContainer.innerHTML = '';
+                    resultDiv.textContent = '';
+                }
+            });
+        });
+
+        function renderExam(exam) {
+            questionsContainer.innerHTML = '<h2>' + exam.title + '</h2>';
+            exam.questions.forEach(q => {
+                const div = document.createElement('div');
+                div.className = 'question';
+
+                const h3 = document.createElement('h3');
+                h3.textContent = q.questionText;
+                div.appendChild(h3);
+
+                if (q.questionType === 'multiple_choice') {
+                    q.choices.forEach(choice => {
+                        const label = document.createElement('label');
+                        const radio = document.createElement('input');
+                        radio.type = 'radio';
+                        radio.name = `q_${q.id}`;
+                        radio.value = choice.id;
+
+                        label.appendChild(radio);
+                        label.appendChild(document.createTextNode(' ' + choice.choiceText));
+                        div.appendChild(label);
+                        div.appendChild(document.createElement('br'));
+                    });
+                } else if (q.questionType === 'essay') {
+                    const textarea = document.createElement('textarea');
+                    textarea.name = `q_${q.id}`;
+                    textarea.rows = 4;
+                    textarea.cols = 50;
+                    div.appendChild(textarea);
+                }
+
+                questionsContainer.appendChild(div);
+            });
+        }
+
+        examForm.addEventListener('submit', event => {
+            event.preventDefault();
+
+            const examId = examIdInput.value;
+            const answers = {};
+
+            const elements = examForm.elements;
+            for (let i = 0; i < elements.length; i++) {
+                const el = elements[i];
+                if (!el.name || !el.name.startsWith('q_')) continue;
+
+                const questionId = parseInt(el.name.substring(2));
+
+                if (el.type === 'radio' && el.checked) {
+                    answers[questionId] = el.value;
+                } else if (el.tagName.toLowerCase() === 'textarea') {
+                    answers[questionId] = el.value.trim();
+                }
+            }
+
+            const token = localStorage.getItem('jwtToken');
+            if (!token) {
+                alert('Önce giriş yapmalısınız!');
+                loginDiv.style.display = 'block';
+                return;
+            }
+
+            fetch('/submit', {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                },
+                body: JSON.stringify({ examId: parseInt(examId), answers })
+            })
+                .then(response => {
+                    if (response.status === 401) {
+                        alert('Giriş yapmanız gerekiyor!');
+                        loginDiv.style.display = 'block';
+                        throw new Error('Unauthorized');
+                    }
+                    if (!response.ok) throw new Error('Gönderimde hata oluştu');
+                    return response.json();
+                })
+                .then(data => {
+                    resultDiv.textContent = 'Puanınız: ' + data.score;
+                })
+                .catch(err => {
+                    if (err.message !== 'Unauthorized') {
+                        alert(err.message);
+                    }
+                });
+        });
+
+        // Eğer sayfa açıldığında token varsa login formunu gizle
+        if (localStorage.getItem('jwtToken')) {
+            loginDiv.style.display = 'none';
+        }
+    </script>
+</body>
+</html>
